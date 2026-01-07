@@ -1,0 +1,49 @@
+[package]
+name = "arbitrage-bot"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# --- Core ---
+tokio = { version = "1.41", features = ["full", "parking_lot"] }
+
+# --- Networking (Standardized on Rustls) ---
+# FIX: Switched from "native-tls" to "rustls-tls-native-roots"
+# This compiles SSL into your binary. No more "missing OpenSSL" errors.
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
+futures-util = "0.3"
+
+# FIX: Explicitly disable default-features to prevent reqwest from bringing in native-tls
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "http2"] }
+
+# --- Data & Logic ---
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rust_decimal = { version = "1.36", features = ["serde-with-str", "maths"] }
+dashmap = "6.1"
+strum = { version = "0.26", features = ["derive"] }
+
+# --- Config & Logs ---
+dotenvy = "0.15"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "local-time"] }
+csv = "1.3"
+
+# --- Errors ---
+anyhow = "1.0"
+thiserror = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+
+# --- Blockchain (Fixed Version) ---
+# FIX: Upgraded to v1.2 (Standard for 2026)
+alloy = { version = "1.2", features = ["signer-local", "provider-http", "sol-types"], optional = true }
+
+[features]
+default = []
+live-trading = ["alloy"]
+
+[profile.release]
+# Relaxed settings for better stack traces
+opt-level = 2
+lto = false
+debug = true
