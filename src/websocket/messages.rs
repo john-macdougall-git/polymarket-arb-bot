@@ -4,10 +4,10 @@ use rust_decimal::Decimal;
 use std::str::FromStr;
 
 impl SubscribeMessage {
-    /// Create a new market subscription message
-    pub fn new_market_subscription(token_id: String) -> Self {
+    /// Create a new market subscription message for multiple tokens
+    pub fn new_market_subscription(token_ids: Vec<String>) -> Self {
         Self {
-            assets_ids: vec![token_id],
+            assets_ids: token_ids,
             msg_type: "market".to_string(),
         }
     }

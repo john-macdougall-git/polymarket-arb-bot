@@ -59,19 +59,21 @@ async fn main() -> Result<()> {
     // Create a channel for WebSocket messages
     let (ws_tx, mut ws_rx) = mpsc::unbounded_channel::<WsMessage>();
 
-    // Spawn WebSocket clients for each token
-    for market in &markets {
-        for token in &market.tokens {
-            let client = WebSocketClient::new(token.token_id.clone(), ws_tx.clone());
-            let token_id = token.token_id.clone();
+    // Collect all token IDs from all markets
+    let token_ids: Vec<String> = markets
+        .iter()
+        .flat_map(|market| market.tokens.iter().map(|token| token.token_id.clone()))
+        .collect();
 
-            tokio::spawn(async move {
-                if let Err(e) = client.run().await {
-                    error!("WebSocket client error for token {}: {:?}", token_id, e);
-                }
-            });
+    info!("Collected {} token IDs from {} markets", token_ids.len(), markets.len());
+
+    // Spawn a single WebSocket client for all tokens
+    let client = WebSocketClient::new(token_ids, ws_tx);
+    tokio::spawn(async move {
+        if let Err(e) = client.run().await {
+            error!("WebSocket client error: {:?}", e);
         }
-    }
+    });
 
     // Create a map of condition_id -> Market for quick lookup
     let market_map: HashMap<String, Market> = markets
@@ -79,7 +81,7 @@ async fn main() -> Result<()> {
         .map(|m| (m.condition_id.clone(), m))
         .collect();
 
-    info!("All WebSocket connections established. Starting main event loop...");
+    info!("WebSocket connection established. Starting main event loop...");
 
     // Main event loop
     while let Some(msg) = ws_rx.recv().await {

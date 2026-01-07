@@ -16,40 +16,39 @@ const WS_URL: &str = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
 pub type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 pub struct WebSocketClient {
-    token_id: String,
+    token_ids: Vec<String>,
     tx: mpsc::UnboundedSender<WsMessage>,
 }
 
 impl WebSocketClient {
-    /// Create a new WebSocket client for a specific token
+    /// Create a new WebSocket client for multiple tokens
     pub fn new(
-        token_id: String,
+        token_ids: Vec<String>,
         tx: mpsc::UnboundedSender<WsMessage>,
     ) -> Self {
-        Self { token_id, tx }
+        Self { token_ids, tx }
     }
 
     /// Connect to WebSocket and subscribe to market updates
     pub async fn run(&self) -> Result<()> {
         loop {
-            info!("Connecting to WebSocket for token {}", self.token_id);
+            info!("Connecting to WebSocket for {} tokens", self.token_ids.len());
 
             match self.connect_and_listen().await {
                 Ok(_) => {
-                    info!("WebSocket connection closed normally for token {}", self.token_id);
+                    info!("WebSocket connection closed normally");
                 }
                 Err(e) => {
                     error!(
-                        "WebSocket error for token {}: {:?}",
-                        self.token_id, e
+                        "WebSocket error: {:?}",
+                        e
                     );
                 }
             }
 
             // Exponential backoff before reconnecting
             warn!(
-                "Reconnecting to WebSocket for token {} in 5 seconds...",
-                self.token_id
+                "Reconnecting to WebSocket in 5 seconds..."
             );
             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
         }
@@ -66,12 +65,12 @@ impl WebSocketClient {
 
         debug!("WebSocket connected, HTTP status: {}", response.status());
 
-        info!("WebSocket connected for token {}", self.token_id);
+        info!("WebSocket connected, subscribing to {} tokens", self.token_ids.len());
 
         let (mut write, mut read) = ws_stream.split();
 
-        // Subscribe to market updates
-        let subscribe_msg = SubscribeMessage::new_market_subscription(self.token_id.clone());
+        // Subscribe to market updates for all tokens at once
+        let subscribe_msg = SubscribeMessage::new_market_subscription(self.token_ids.clone());
         let subscribe_json = subscribe_msg.to_json()?;
 
         write
@@ -79,7 +78,7 @@ impl WebSocketClient {
             .await
             .context("Failed to send subscription message")?;
 
-        info!("Subscribed to market updates for token {}", self.token_id);
+        info!("Subscribed to market updates for {} tokens", self.token_ids.len());
 
         // Listen for messages
         while let Some(msg_result) = read.next().await {
@@ -91,8 +90,7 @@ impl WebSocketClient {
                     } else {
                         text_str.clone()
                     };
-                    info!("📨 Received WebSocket message (token {}): {}",
-                          &self.token_id[..20], preview);
+                    debug!("📨 Received WebSocket message: {}", preview);
 
                     match WsMessage::from_json(&text_str) {
                         Ok(ws_messages) => {
@@ -118,7 +116,7 @@ impl WebSocketClient {
                     debug!("Received pong");
                 }
                 Ok(Message::Close(_)) => {
-                    info!("WebSocket closed by server for token {}", self.token_id);
+                    info!("WebSocket closed by server");
                     break;
                 }
                 Ok(Message::Binary(_)) => {
