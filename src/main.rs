@@ -36,14 +36,24 @@ async fn main() -> Result<()> {
         "Configuration loaded: min_profit_threshold={}, max_position_size={}",
         config.min_profit_threshold, config.max_position_size
     );
+    info!(
+        "Market filters: min_volume={:?}, max_volume={:?}, max_markets={:?}",
+        config.min_market_volume, config.max_market_volume, config.max_markets
+    );
 
     // Initialize CSV logger
     let csv_logger = CsvLogger::new(&config.csv_output_path)?;
     info!("CSV logger initialized: {}", config.csv_output_path);
 
-    // Discover top markets
+    // Discover markets with configurable filters
     let discovery = MarketDiscovery::new();
-    let markets = discovery.get_top_markets(10).await?;
+    let markets = discovery
+        .get_filtered_markets(
+            config.min_market_volume,
+            config.max_market_volume,
+            config.max_markets,
+        )
+        .await?;
 
     if markets.is_empty() {
         error!("No active markets found!");

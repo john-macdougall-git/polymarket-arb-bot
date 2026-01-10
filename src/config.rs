@@ -9,6 +9,11 @@ pub struct Config {
     pub csv_output_path: String,
     pub polymarket_api_key: Option<String>,
     pub polymarket_private_key: Option<String>,
+
+    // Market selection filters
+    pub min_market_volume: Option<f64>,
+    pub max_market_volume: Option<f64>,
+    pub max_markets: Option<usize>,
 }
 
 impl Config {
@@ -33,12 +38,28 @@ impl Config {
         let polymarket_api_key = env::var("POLYMARKET_API_KEY").ok();
         let polymarket_private_key = env::var("POLYMARKET_PRIVATE_KEY").ok();
 
+        // Market selection filters (all optional)
+        let min_market_volume = env::var("MIN_MARKET_VOLUME")
+            .ok()
+            .and_then(|v| v.parse().ok());
+
+        let max_market_volume = env::var("MAX_MARKET_VOLUME")
+            .ok()
+            .and_then(|v| v.parse().ok());
+
+        let max_markets = env::var("MAX_MARKETS")
+            .ok()
+            .and_then(|v| v.parse().ok());
+
         Ok(Config {
             min_profit_threshold,
             max_position_size,
             csv_output_path,
             polymarket_api_key,
             polymarket_private_key,
+            min_market_volume,
+            max_market_volume,
+            max_markets,
         })
     }
 }

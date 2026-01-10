@@ -71,6 +71,19 @@ cargo run --release
 RUST_LOG=arbitrage_bot=debug cargo run
 ```
 
+### Test WebSocket latency (determine optimal server location):
+```bash
+cargo run --release --bin latency_test
+```
+
+This measures ping/pong round-trip time to Polymarket's matching engine. Run from different server locations (AWS regions, data centers) to find the lowest latency for HFT. Provides min/max/avg/p95/p99 statistics over 100 pings.
+
+**Interpretation:**
+- < 10ms: Excellent for HFT
+- 10-50ms: Good for HFT
+- 50-100ms: Acceptable but may lose competitive edge
+- \> 100ms: Too slow for HFT arbitrage
+
 ## Handling sessions with tmux
 ```bash
 # Detach while running
@@ -128,7 +141,7 @@ src/
 ### Data Flow
 
 1. **Market Discovery**: Fetches top markets via Polymarket REST API
-2. **WebSocket Connections**: Spawns WebSocket clients for each token
+2. **WebSocket Connection**: Opens a single WebSocket connection and subscribes to all tokens
 3. **Order Book Updates**: Messages routed to `OrderBookManager` (thread-safe DashMap)
 4. **Arbitrage Detection**: On every update, checks all markets for opportunities
 5. **Logging**: Opportunities logged to console and CSV

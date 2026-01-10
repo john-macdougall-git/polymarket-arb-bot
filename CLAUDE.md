@@ -45,6 +45,13 @@ cargo fmt
 cargo clippy
 ```
 
+### Test WebSocket Latency (Server Location Selection)
+```bash
+cargo run --release --bin latency_test
+```
+
+This tool measures round-trip ping/pong latency to Polymarket's matching engine. Run this from different server locations (AWS us-east-1, eu-west-1, etc.) to determine optimal deployment location for HFT. Results include min/max/avg/p95/p99 statistics over 100 pings.
+
 ## Architecture
 
 ### High-Level Design
@@ -52,7 +59,7 @@ cargo clippy
 The bot is an **event-driven system** built around WebSocket streams:
 
 1. **Market Discovery** (REST API): Fetches top N markets by volume from Polymarket Gamma API
-2. **WebSocket Layer**: Maintains persistent connections to Polymarket CLOB WebSocket for real-time order book updates
+2. **WebSocket Layer**: Maintains a single persistent connection to Polymarket CLOB WebSocket, subscribing to all token IDs in one subscription message (efficient, avoids rate limiting)
 3. **Order Book Manager**: Thread-safe (DashMap) in-memory order books for all monitored tokens
 4. **Arbitrage Detector**: Triggered on every order book update to check for opportunities
 5. **CSV Logger**: Records all detected opportunities with full details
@@ -70,6 +77,7 @@ The bot is an **event-driven system** built around WebSocket streams:
 - **src/websocket/messages.rs**: WebSocket message parsing and serialization
 - **src/orderbook/book.rs**: `OrderBookManager` using DashMap for concurrent access
 - **src/detector/arbitrage.rs**: Core arbitrage detection logic
+- **src/bin/latency_test.rs**: Standalone tool for measuring WebSocket ping/pong latency to Polymarket's matching engine (used for server location selection)
 
 ### Key Design Decisions
 
@@ -87,10 +95,13 @@ let total_cost = yes_price + no_price; // Both are Decimal
 let profit = Decimal::from(1) - total_cost;
 ```
 
-#### 3. Separate WebSocket Task per Token
-**Why**: Polymarket CLOB requires subscribing to individual token IDs. We spawn one task per token to parallelize connections.
+#### 3. Single WebSocket Connection for All Tokens
+**Why**: Polymarket's `SubscribeMessage` accepts an array of `assets_ids`. Using one connection for all tokens (instead of N connections) prevents rate limiting and reduces overhead.
 
-**How**: Each `WebSocketClient` sends messages to a shared `mpsc::unbounded_channel`, which the main loop processes sequentially.
+**How**: `WebSocketClient` accepts `Vec<String>` of token IDs and subscribes to all in one message. Messages are sent to a shared `mpsc::unbounded_channel` that the main loop processes sequentially.
+
+**Before**: 10 markets × 2 tokens = 20 TCP connections (inefficient, triggers abuse detection)
+**After**: 10 markets × 2 tokens = 1 TCP connection (efficient, scalable)
 
 #### 4. BTreeMap Inside OrderBook
 **Why**: Order books need sorted price levels (best bid = highest price, best ask = lowest price). `BTreeMap` maintains sorted order automatically.
@@ -158,10 +169,40 @@ Polymarket CLOB sends several message types (see `src/types.rs`):
 
 All configuration is via environment variables (`.env` file):
 
+**Trading Parameters:**
 - `MIN_PROFIT_THRESHOLD`: Minimum profit per unit (default: 0.01 = 1 cent)
 - `MAX_POSITION_SIZE`: Max size to consider (default: 100)
+
+**Market Selection Filters (all optional):**
+- `MIN_MARKET_VOLUME`: Minimum 24h volume to monitor (default: None = no minimum)
+- `MAX_MARKET_VOLUME`: Maximum 24h volume to monitor (default: None = no maximum)
+- `MAX_MARKETS`: Maximum number of markets to track (default: None = unlimited)
+
+**Output & Logging:**
 - `CSV_OUTPUT_PATH`: Where to log opportunities (default: `./opportunities.csv`)
 - `RUST_LOG`: Log level (e.g., `arbitrage_bot=debug,info`)
+
+**Market Selection Strategy:**
+
+If all filters are unset, the bot monitors **all active markets** on Polymarket.
+
+Common configurations:
+- **Cast wide net (recommended for arbitrage)**: Leave all filters unset or set `MAX_MARKETS=500`
+- **Target mid-tier markets**: Set `MIN_MARKET_VOLUME=1000` and `MAX_MARKET_VOLUME=500000`
+- **Avoid whale markets**: Set `MAX_MARKET_VOLUME=100000`
+- **Resource-limited server**: Set `MAX_MARKETS=50`
+
+**Why volume filtering matters for HFT:**
+High-volume markets (top 10-20 by volume) are dominated by professional market makers. Arbitrage spreads >1% rarely exist because:
+- Multiple HFT bots compete for the same opportunities
+- Market makers maintain tight spreads (<0.5%)
+- Any mispricing is corrected in microseconds
+
+Mid-tier and long-tail markets have:
+- Less competition from professional traders
+- Wider spreads due to lower liquidity
+- More frequent arbitrage opportunities (1-5% spreads)
+- Longer opportunity windows (seconds vs microseconds)
 
 ### Adding New Features
 
@@ -171,8 +212,14 @@ All configuration is via environment variables (`.env` file):
 3. Create `src/execution/` module with FOK order logic
 4. Add leg risk mitigation (emergency sell if one order fails)
 
-#### To add more markets:
-Change `get_top_markets(10)` to higher number in `src/main.rs`.
+#### To monitor more/fewer markets:
+Edit your `.env` file and adjust the market selection filters:
+- Remove all filters to monitor all active markets
+- Set `MAX_MARKETS=200` to limit resource usage
+- Set `MAX_MARKET_VOLUME=100000` to filter out whale-dominated markets
+- Set `MIN_MARKET_VOLUME=5000` to filter out illiquid markets
+
+No code changes or recompilation required.
 
 #### To add fee calculation:
 Modify `src/detector/arbitrage.rs` to include taker fees in `total_cost`:

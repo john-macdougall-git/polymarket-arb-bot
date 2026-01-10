@@ -1,6 +1,7 @@
 use crate::types::Market;
 use anyhow::{Context, Result};
 use reqwest::Client;
+use rust_decimal::Decimal;
 use serde::Deserialize;
 use tracing::info;
 
@@ -122,6 +123,56 @@ impl MarketDiscovery {
         info!(
             "Selected top {} markets by volume",
             markets.len()
+        );
+
+        for (i, market) in markets.iter().enumerate() {
+            info!(
+                "  {}. {} (volume: ${}, id: {})",
+                i + 1,
+                market.question,
+                market.volume,
+                market.condition_id
+            );
+        }
+
+        Ok(markets)
+    }
+
+    /// Get filtered markets based on volume range and count limits
+    pub async fn get_filtered_markets(
+        &self,
+        min_volume: Option<f64>,
+        max_volume: Option<f64>,
+        max_count: Option<usize>,
+    ) -> Result<Vec<Market>> {
+        let mut markets = self.fetch_active_markets().await?;
+
+        // Apply volume filters
+        if let Some(min) = min_volume {
+            let min_decimal = Decimal::from_f64_retain(min)
+                .context("Failed to convert MIN_MARKET_VOLUME to Decimal")?;
+            markets.retain(|m| m.volume >= min_decimal);
+            info!("Applied MIN_MARKET_VOLUME filter: ${}", min);
+        }
+
+        if let Some(max) = max_volume {
+            let max_decimal = Decimal::from_f64_retain(max)
+                .context("Failed to convert MAX_MARKET_VOLUME to Decimal")?;
+            markets.retain(|m| m.volume <= max_decimal);
+            info!("Applied MAX_MARKET_VOLUME filter: ${}", max);
+        }
+
+        // Apply count limit
+        if let Some(limit) = max_count {
+            markets.truncate(limit);
+            info!("Applied MAX_MARKETS limit: {}", limit);
+        }
+
+        info!(
+            "Selected {} markets (volume range: ${} - ${})",
+            markets.len(),
+            markets.last().map(|m| m.volume).unwrap_or(Decimal::ZERO),
+            markets.first().map(|m| m.volume).unwrap_or(Decimal::ZERO)
         );
 
         for (i, market) in markets.iter().enumerate() {
