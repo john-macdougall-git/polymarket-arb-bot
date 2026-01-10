@@ -39,80 +39,113 @@ impl MarketDiscovery {
         }
     }
 
-    /// Fetch active markets from Polymarket
+    /// Fetch active markets from Polymarket (with pagination)
     pub async fn fetch_active_markets(&self) -> Result<Vec<Market>> {
-        info!("Fetching active markets from Polymarket...");
+        info!("Fetching active markets from Polymarket (with pagination)...");
 
         let url = format!("{}/markets", GAMMA_API_URL);
+        let limit = 100; // Results per page
+        let mut offset = 0;
+        let mut all_markets = Vec::new();
 
-        let response = self
-            .client
-            .get(&url)
-            .query(&[("active", "true"), ("closed", "false")])
-            .send()
-            .await
-            .context("Failed to fetch markets from Polymarket API")?;
+        loop {
+            info!("Fetching page (offset={}, limit={})...", offset, limit);
 
-        if !response.status().is_success() {
-            anyhow::bail!("API returned error status: {}", response.status());
+            let response = self
+                .client
+                .get(&url)
+                .query(&[
+                    ("active", "true"),
+                    ("closed", "false"),
+                    ("limit", &limit.to_string()),
+                    ("offset", &offset.to_string()),
+                ])
+                .send()
+                .await
+                .context("Failed to fetch markets from Polymarket API")?;
+
+            if !response.status().is_success() {
+                anyhow::bail!("API returned error status: {}", response.status());
+            }
+
+            // API returns a direct array, not wrapped in an object
+            let api_markets: Vec<ApiMarket> = response
+                .json()
+                .await
+                .context("Failed to parse markets response")?;
+
+            let page_size = api_markets.len();
+            info!("Received {} markets on this page", page_size);
+
+            // Process this page
+            let mut page_markets: Vec<Market> = api_markets
+                .into_iter()
+                .filter_map(|api_market| {
+                    // Parse JSON string arrays
+                    let token_ids: Vec<String> = serde_json::from_str(&api_market.clob_token_ids).ok()?;
+                    let outcomes: Vec<String> = serde_json::from_str(&api_market.outcomes).ok()?;
+                    let prices: Vec<String> = serde_json::from_str(&api_market.outcome_prices).ok()?;
+
+                    // Only include markets with exactly 2 tokens (Yes/No)
+                    if token_ids.len() != 2 || outcomes.len() != 2 || prices.len() != 2 {
+                        return None;
+                    }
+
+                    // Only include markets with order book enabled
+                    if !api_market.enable_order_book || !api_market.accepting_orders {
+                        return None;
+                    }
+
+                    // Parse volume
+                    let volume = api_market.volume.parse().ok()?;
+
+                    // Create token objects
+                    let tokens = token_ids
+                        .into_iter()
+                        .zip(outcomes)
+                        .zip(prices)
+                        .map(|((token_id, outcome), price)| crate::types::Token {
+                            token_id,
+                            outcome,
+                            price: price.parse().ok(),
+                        })
+                        .collect();
+
+                    Some(Market {
+                        condition_id: api_market.condition_id,
+                        question: api_market.question,
+                        tokens,
+                        volume,
+                        active: api_market.active,
+                        end_date_iso: api_market.end_date_iso,
+                    })
+                })
+                .collect();
+
+            all_markets.append(&mut page_markets);
+
+            // Check if we've reached the last page
+            if page_size < limit {
+                info!("Reached last page (received {} < {} limit)", page_size, limit);
+                break;
+            }
+
+            // Move to next page
+            offset += limit;
+
+            // Rate limiting: small delay between requests to be respectful
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
 
-        // API returns a direct array, not wrapped in an object
-        let api_markets: Vec<ApiMarket> = response
-            .json()
-            .await
-            .context("Failed to parse markets response")?;
-
-        let mut markets: Vec<Market> = api_markets
-            .into_iter()
-            .filter_map(|api_market| {
-                // Parse JSON string arrays
-                let token_ids: Vec<String> = serde_json::from_str(&api_market.clob_token_ids).ok()?;
-                let outcomes: Vec<String> = serde_json::from_str(&api_market.outcomes).ok()?;
-                let prices: Vec<String> = serde_json::from_str(&api_market.outcome_prices).ok()?;
-
-                // Only include markets with exactly 2 tokens (Yes/No)
-                if token_ids.len() != 2 || outcomes.len() != 2 || prices.len() != 2 {
-                    return None;
-                }
-
-                // Only include markets with order book enabled
-                if !api_market.enable_order_book || !api_market.accepting_orders {
-                    return None;
-                }
-
-                // Parse volume
-                let volume = api_market.volume.parse().ok()?;
-
-                // Create token objects
-                let tokens = token_ids
-                    .into_iter()
-                    .zip(outcomes)
-                    .zip(prices)
-                    .map(|((token_id, outcome), price)| crate::types::Token {
-                        token_id,
-                        outcome,
-                        price: price.parse().ok(),
-                    })
-                    .collect();
-
-                Some(Market {
-                    condition_id: api_market.condition_id,
-                    question: api_market.question,
-                    tokens,
-                    volume,
-                    active: api_market.active,
-                    end_date_iso: api_market.end_date_iso,
-                })
-            })
-            .collect();
-
         // Sort by volume (descending)
-        markets.sort_by(|a, b| b.volume.cmp(&a.volume));
+        all_markets.sort_by(|a, b| b.volume.cmp(&a.volume));
 
-        info!("Fetched {} active markets", markets.len());
+        info!(
+            "Fetched {} total active markets across all pages",
+            all_markets.len()
+        );
 
-        Ok(markets)
+        Ok(all_markets)
     }
 
     /// Get top N markets by volume

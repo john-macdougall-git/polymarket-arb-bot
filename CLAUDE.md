@@ -73,6 +73,9 @@ The bot is an **event-driven system** built around WebSocket streams:
   - Order book types (`OrderBook`, `Order`, `OrderSide`)
   - Domain types (`Market`, `Token`, `Opportunity`)
 - **src/markets/discovery.rs**: REST API client for fetching active markets from Polymarket
+  - **Pagination**: Automatically fetches ALL pages from Gamma API (100 markets per page)
+  - **Rate limiting**: 100ms delay between API requests
+  - **Filtering**: Applies volume filters after fetching all markets
 - **src/websocket/client.rs**: WebSocket client with auto-reconnect logic
 - **src/websocket/messages.rs**: WebSocket message parsing and serialization
 - **src/orderbook/book.rs**: `OrderBookManager` using DashMap for concurrent access
@@ -204,6 +207,14 @@ Mid-tier and long-tail markets have:
 - More frequent arbitrage opportunities (1-5% spreads)
 - Longer opportunity windows (seconds vs microseconds)
 
+**How pagination ensures you reach mid-tier markets:**
+The bot uses automatic pagination to fetch ALL active markets from Polymarket (not just the first page of 100 results). This means:
+- Top 100 markets (pages 1-2) = whale-dominated, hyper-competitive
+- Markets 100-500 (pages 2-5) = mid-tier, optimal for arbitrage
+- Markets 500+ (pages 5+) = long-tail, wider spreads but less liquidity
+
+Volume filters are applied AFTER fetching all pages, ensuring you can access any tier of markets regardless of where they appear in the API results.
+
 ### Adding New Features
 
 #### To add live trading (future):
@@ -230,10 +241,12 @@ let total_cost = yes_ask.price + no_ask.price + fee;
 
 ### Common Gotchas
 
-1. **WebSocket Disconnects**: The client auto-reconnects with 5-second delay. Check logs if you see gaps.
-2. **Empty Order Books**: Markets with low liquidity may have empty asks/bids. The code uses `Option<>` to handle this.
-3. **CSV Append Mode**: The CSV logger appends to existing files. Delete `opportunities.csv` to start fresh.
-4. **Time Zones**: All timestamps are UTC (via `chrono::Utc::now()`).
+1. **Startup Time**: The bot fetches ALL active markets from Polymarket using pagination (100 per page with 100ms delay). Expect 5-15 seconds startup time depending on how many markets are active. Watch the logs for "Fetching page (offset=X)" messages.
+2. **WebSocket Disconnects**: The client auto-reconnects with 5-second delay. Check logs if you see gaps.
+3. **Empty Order Books**: Markets with low liquidity may have empty asks/bids. The code uses `Option<>` to handle this.
+4. **CSV Append Mode**: The CSV logger appends to existing files. Delete `opportunities.csv` to start fresh.
+5. **Time Zones**: All timestamps are UTC (via `chrono::Utc::now()`).
+6. **API Pagination**: The bot automatically fetches all pages from the Gamma API. If you set volume filters, filtering happens AFTER fetching all markets, so you'll always have access to mid-tier and long-tail markets.
 
 ### Dependencies
 
