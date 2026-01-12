@@ -21,6 +21,30 @@ impl ArbitrageDetector {
         yes_book: &OrderBook,
         no_book: &OrderBook,
     ) -> Option<Opportunity> {
+        // Check if order books are out of sync (missed sequence numbers)
+        if yes_book.out_of_sync {
+            return None; // Yes book is out of sync
+        }
+
+        if no_book.out_of_sync {
+            return None; // No book is out of sync
+        }
+
+        // Check data freshness: discard order books older than 100ms
+        let now = Utc::now();
+        let max_age_ms = 100;
+
+        let yes_age = (now - yes_book.last_updated).num_milliseconds();
+        let no_age = (now - no_book.last_updated).num_milliseconds();
+
+        if yes_age > max_age_ms {
+            return None; // Yes book data is too old
+        }
+
+        if no_age > max_age_ms {
+            return None; // No book data is too old
+        }
+
         // Get best ask prices
         let yes_ask = yes_book.get_best_ask()?;
         let no_ask = no_book.get_best_ask()?;

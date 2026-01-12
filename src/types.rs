@@ -30,12 +30,16 @@ pub enum WsMessage {
         timestamp: Option<String>,
         hash: Option<String>,
         last_trade_price: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
     },
     #[serde(rename = "price_change")]
     PriceChange {
         market: String,
         price_changes: Vec<PriceChangeItem>,
         timestamp: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
     },
     #[serde(rename = "last_trade_price")]
     LastTradePrice {
@@ -43,6 +47,8 @@ pub enum WsMessage {
         asset_id: String,
         price: String,
         timestamp: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
     },
     #[serde(rename = "error")]
     Error {
@@ -101,6 +107,10 @@ pub struct OrderBook {
     /// Bids: price -> size (sorted descending by price)
     pub bids: BTreeMap<Decimal, Decimal>,
     pub last_updated: DateTime<Utc>,
+    /// Last processed sequence number (for gap detection)
+    pub last_seq: Option<u64>,
+    /// Flag indicating if the order book is out of sync
+    pub out_of_sync: bool,
 }
 
 impl OrderBook {
@@ -110,6 +120,8 @@ impl OrderBook {
             asks: BTreeMap::new(),
             bids: BTreeMap::new(),
             last_updated: Utc::now(),
+            last_seq: None,
+            out_of_sync: false,
         }
     }
 
@@ -133,6 +145,28 @@ impl OrderBook {
                 price: *price,
                 size: *size,
             })
+    }
+
+    /// Validate sequence number and check for gaps
+    /// Returns true if sequence is valid, false if there's a gap
+    pub fn validate_sequence(&mut self, seq: Option<u64>) -> bool {
+        if let Some(new_seq) = seq {
+            if let Some(last_seq) = self.last_seq {
+                // Check for sequence gap (missed packets)
+                if new_seq != last_seq + 1 {
+                    self.out_of_sync = true;
+                    return false;
+                }
+            }
+            self.last_seq = Some(new_seq);
+        }
+        true
+    }
+
+    /// Reset sync flag when receiving a full snapshot
+    pub fn reset_sync(&mut self) {
+        self.out_of_sync = false;
+        self.last_seq = None;
     }
 
     /// Update order book with new price level
@@ -164,6 +198,8 @@ impl OrderBook {
             }
         }
         self.last_updated = Utc::now();
+        // Snapshots reset the sync state
+        self.reset_sync();
     }
 }
 

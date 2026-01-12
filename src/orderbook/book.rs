@@ -40,13 +40,15 @@ impl OrderBookManager {
                 asset_id: _,
                 bids,
                 asks,
+                seq,
                 ..
             } => {
-                self.handle_book_snapshot(&market, bids, asks)?;
+                self.handle_book_snapshot(&market, bids, asks, seq)?;
             }
             WsMessage::PriceChange {
                 market: _,
                 price_changes,
+                seq,
                 ..
             } => {
                 // Process each price change in the array
@@ -56,6 +58,7 @@ impl OrderBookManager {
                         change.side(),
                         &change.price,
                         &change.size,
+                        seq,
                     )?;
                 }
             }
@@ -76,10 +79,19 @@ impl OrderBookManager {
         token_id: &str,
         bids: Vec<PriceLevel>,
         asks: Vec<PriceLevel>,
+        seq: Option<u64>,
     ) -> Result<()> {
         self.init_book(token_id.to_string());
 
         let mut book_entry = self.books.get_mut(token_id).unwrap();
+
+        // Snapshots reset the sequence tracking
+        book_entry.reset_sync();
+
+        // Update sequence number if provided
+        if let Some(seq_num) = seq {
+            book_entry.last_seq = Some(seq_num);
+        }
 
         // Parse and replace bids
         let bid_levels: Vec<(Decimal, Decimal)> = bids
@@ -98,10 +110,11 @@ impl OrderBookManager {
         book_entry.replace_side(OrderSide::Ask, ask_levels);
 
         debug!(
-            "Updated order book snapshot for token {} ({} bids, {} asks)",
+            "Updated order book snapshot for token {} ({} bids, {} asks, seq: {:?})",
             token_id,
             book_entry.bids.len(),
-            book_entry.asks.len()
+            book_entry.asks.len(),
+            seq
         );
 
         Ok(())
@@ -114,6 +127,7 @@ impl OrderBookManager {
         side: OrderSide,
         price_str: &str,
         size_str: &str,
+        seq: Option<u64>,
     ) -> Result<()> {
         self.init_book(token_id.to_string());
 
@@ -121,11 +135,23 @@ impl OrderBookManager {
         let size = Decimal::from_str(size_str)?;
 
         let mut book_entry = self.books.get_mut(token_id).unwrap();
+
+        // Validate sequence number and detect gaps
+        if !book_entry.validate_sequence(seq) {
+            warn!(
+                "⚠️  Sequence gap detected for token {}! Expected {}, got {:?}. Order book may be out of sync.",
+                token_id,
+                book_entry.last_seq.map(|s| s + 1).unwrap_or(0),
+                seq
+            );
+            // Mark the book as out of sync - arbitrage detector will skip it
+        }
+
         book_entry.update(side, price, size);
 
         debug!(
-            "Updated order book for token {} (side: {:?}, price: {}, size: {})",
-            token_id, side, price, size
+            "Updated order book for token {} (side: {:?}, price: {}, size: {}, seq: {:?})",
+            token_id, side, price, size, seq
         );
 
         Ok(())
